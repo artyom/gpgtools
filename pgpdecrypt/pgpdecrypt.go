@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -34,7 +35,7 @@ func main() {
 }
 
 func run(keyring, src, dest string, recursive bool) error {
-	if src == dst {
+	if src == dest {
 		return fmt.Errorf("source and destination cannot be the same")
 	}
 	kr, err := readKeyRing(keyring)
@@ -93,11 +94,21 @@ func decryptFile(keyring openpgp.KeyRing, source, dest string) error {
 		return err
 	}
 	defer from.Close()
-	to, err := os.Create(dest)
+	stat, err := from.Stat()
 	if err != nil {
 		return err
 	}
-	defer to.Close()
+	var to *os.File
+	switch dest {
+	case "/dev/stdout":
+		to = os.Stdout
+	default:
+		if to, err = ioutil.TempFile(filepath.Dir(dest), ".pgpdecrypt-"); err != nil {
+			return err
+		}
+		defer to.Close()
+		defer os.Remove(to.Name())
+	}
 	plaintextReader, err := decrypt(keyring, from)
 	if err != nil {
 		return err
@@ -105,7 +116,16 @@ func decryptFile(keyring openpgp.KeyRing, source, dest string) error {
 	if _, err = io.Copy(to, plaintextReader); err != nil {
 		return err
 	}
-	return to.Close()
+	if dest == "/dev/stdout" {
+		return to.Sync()
+	}
+	if err := to.Chmod(stat.Mode()); err != nil {
+		return err
+	}
+	if err := to.Close(); err != nil {
+		return err
+	}
+	return os.Rename(to.Name(), dest)
 }
 
 func decrypt(keyring openpgp.KeyRing, encrypted io.Reader) (io.Reader, error) {
