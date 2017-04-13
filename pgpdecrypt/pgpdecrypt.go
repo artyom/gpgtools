@@ -18,37 +18,40 @@ import (
 )
 
 func main() {
-	p := struct {
-		Keyring string `flag:"keyring,path to keyring"`
-		Source  string `flag:"src,source file (encrypted to one of the keys in keyring)"`
-		Dest    string `flag:"dst,output file (decrypted)"`
-		Rec     bool   `flag:"r,recursive (src and dst should be directories then)"`
-	}{
-		Source: "/dev/stdin",
-		Dest:   "/dev/stdout",
+	p := &mainArgs{
+		Src: "/dev/stdin",
+		Dst: "/dev/stdout",
 	}
-	autoflags.Parse(&p)
-	if err := run(p.Keyring, p.Source, p.Dest, p.Rec); err != nil {
+	autoflags.Parse(p)
+	if err := run(p); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func run(keyring, src, dest string, recursive bool) error {
-	if src == dest {
+type mainArgs struct {
+	Keys string `flag:"keyring,path to keyring"`
+	Src  string `flag:"src,source file (encrypted to one of the keys in keyring)"`
+	Dst  string `flag:"dst,output file (decrypted)"`
+	Rec  bool   `flag:"r,recursive (src and dst should be directories then)"`
+	Rm   bool   `flag:"rm,remove source files when decrypted in recursive mode"`
+}
+
+func run(args *mainArgs) error {
+	if args.Src == args.Dst {
 		return fmt.Errorf("source and destination cannot be the same")
 	}
-	kr, err := readKeyRing(keyring)
+	kr, err := readKeyRing(args.Keys)
 	if err != nil {
 		return err
 	}
-	if !recursive {
-		return decryptFile(kr, src, dest)
+	if !args.Rec {
+		return decryptFile(kr, args.Src, args.Dst)
 	}
-	return decryptRecursive(kr, src, dest)
+	return decryptRecursive(kr, args.Src, args.Dst, args.Rm)
 }
 
-func decryptRecursive(keyring openpgp.KeyRing, src, dst string) error {
+func decryptRecursive(keyring openpgp.KeyRing, src, dst string, rm bool) error {
 	if err := os.MkdirAll(dst, 0755); err != nil {
 		return err
 	}
@@ -80,6 +83,9 @@ func decryptRecursive(keyring openpgp.KeyRing, src, dst string) error {
 				}
 				if err := decryptFile(keyring, path, dst); err != nil {
 					return err
+				}
+				if rm {
+					_ = os.Remove(path)
 				}
 			}
 			return nil
