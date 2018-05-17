@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -104,34 +105,41 @@ func decryptFile(keyring openpgp.KeyRing, source, dest string) error {
 	if err != nil {
 		return err
 	}
-	var to *os.File
+	var dstFile *os.File
+	var writer io.Writer
 	switch dest {
-	case "/dev/stdout":
-		to = os.Stdout
+	case os.Stdout.Name():
+		writer = os.Stdout
 	default:
-		if to, err = ioutil.TempFile(filepath.Dir(dest), ".pgpdecrypt-"); err != nil {
+		if dstFile, err = ioutil.TempFile(filepath.Dir(dest), ".pgpdecrypt-"); err != nil {
 			return err
 		}
-		defer to.Close()
-		defer os.Remove(to.Name())
+		defer dstFile.Close()
+		defer os.Remove(dstFile.Name())
+		writer = bufio.NewWriterSize(dstFile, 1<<19)
 	}
 	plaintextReader, err := decrypt(keyring, from)
 	if err != nil {
 		return err
 	}
-	if _, err = io.Copy(to, plaintextReader); err != nil {
+	if _, err = io.Copy(writer, plaintextReader); err != nil {
 		return err
 	}
-	if dest == "/dev/stdout" {
-		return to.Sync()
+	if f, ok := writer.(*os.File); ok && f.Name() == os.Stdout.Name() {
+		return f.Sync()
 	}
-	if err := to.Chmod(stat.Mode()); err != nil {
+	if bw, ok := writer.(*bufio.Writer); ok {
+		if err := bw.Flush(); err != nil {
+			return err
+		}
+	}
+	if err := dstFile.Chmod(stat.Mode()); err != nil {
 		return err
 	}
-	if err := to.Close(); err != nil {
+	if err := dstFile.Close(); err != nil {
 		return err
 	}
-	return os.Rename(to.Name(), dest)
+	return os.Rename(dstFile.Name(), dest)
 }
 
 func decrypt(keyring openpgp.KeyRing, encrypted io.Reader) (io.Reader, error) {
